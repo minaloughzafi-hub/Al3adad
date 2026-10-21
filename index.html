@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>عداد الذكر</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#ffffff">
+<link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="العداد">
+<style>
+  :root { --bg:#fff; --fg:#000; --btn:#FFA500; --bar:#000; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--fg); font-family:system-ui,"Segoe UI",Tahoma,sans-serif;
+         display:flex; flex-direction:column; overflow:hidden;
+         transition:background .5s,color .5s; -webkit-tap-highlight-color:transparent;
+         user-select:none; -webkit-user-select:none; touch-action:manipulation; }
+
+  /* شاشة الإقلاع */
+  #splash { position:fixed; inset:0; z-index:10; background:#fff; display:flex;
+            align-items:center; justify-content:center; cursor:pointer;
+            transition:opacity .6s ease, visibility .6s; }
+  #splash.hide { opacity:0; visibility:hidden; }
+  #splash img { width:86vw; max-width:560px; height:auto; opacity:0; transform:scale(.94);
+                animation:pop 1s ease .1s forwards; }
+  @keyframes pop { to { opacity:1; transform:scale(1); } }
+
+  /* الشريط العلوي */
+  .top { display:flex; justify-content:space-between; align-items:flex-start;
+         padding:calc(env(safe-area-inset-top,0px) + 22px) 26px 0; }
+  #reset { font-size:30px; font-weight:700; background:none; border:0; color:var(--fg);
+           cursor:pointer; padding:4px 0; font-family:inherit; }
+  .stat { text-align:left; direction:rtl; padding:4px 0; cursor:default; }
+  .stat .lbl { font-size:15px; opacity:.7; display:block; }
+  .stat .num { font-size:34px; font-weight:700; line-height:1.1; display:block; direction:ltr; text-align:left; }
+
+  .center { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:1.2vh; padding:0 12px min(37vw,200px); box-sizing:border-box; min-height:0; }
+  #clock { font-size:min(17vw,9vh,92px); font-weight:700; direction:ltr; line-height:1;
+           font-variant-numeric:tabular-nums; letter-spacing:.02em; }
+  #date  { font-size:min(5.4vw,2.8vh,26px); font-weight:600; opacity:.85; text-align:center; }
+  #timer { margin-top:1.2vh; font-size:min(10vw,5vh,52px); direction:ltr; font-variant-numeric:tabular-nums;
+           letter-spacing:.04em; opacity:.85; transition:opacity .4s; }
+  #timer.paused { opacity:.4; }
+  #count { font-size:min(27vw,13vh,140px); direction:ltr; font-variant-numeric:tabular-nums; line-height:1.1; }
+  #count.pulse { animation:pulse .5s ease; }
+  @keyframes pulse { 40% { transform:scale(1.12); } }
+
+  .bottom { position:relative; height:26vh; background:var(--bar); transition:background .5s;
+            padding-bottom:env(safe-area-inset-bottom,0px); }
+  #btn { position:absolute; left:50%; top:0; transform:translate(-50%,-50%);
+         width:74vw; max-width:420px; height:74vw; max-height:420px; border:0;
+         border-radius:42%; background:var(--btn); cursor:pointer;
+         transition:background .5s, transform .1s; }
+  #btn:active { transform:translate(-50%,-50%) scale(.96); }
+</style>
+</head>
+<body>
+
+<div id="splash"><img src="splash.jpg" alt="لا تنس ذكر الله"></div>
+
+<div class="top">
+  <button id="reset">إعادة</button>
+  <div class="stat" id="stat" title="اضغط مطولا لتصفير هذا العداد">
+    <span class="lbl">مرات بلوغ 100</span>
+    <span class="num" id="done">0</span>
+  </div>
+</div>
+<div class="center">
+  <div id="clock">00:00:00</div>
+  <div id="date"></div>
+  <div id="timer" class="paused">00.00.00</div>
+  <div id="count">00</div>
+</div>
+<div class="bottom"><button id="btn" aria-label="عد"></button></div>
+
+<script>
+/* ---------- التخزين ---------- */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+};
+
+let n = store.get('count', 0);
+let done = store.get('done', 0);
+let colors = store.get('colors', null);
+let secs = store.get('secs', 0);          // الوقت المقضي بالثواني
+let started = store.get('started', false); // يبدأ مع أول ضغطة ولا يتوقف إلا بـ "إعادة"
+let acc = 0, lastTick = Date.now();
+
+const root = document.documentElement.style;
+const countEl = document.getElementById('count');
+const doneEl = document.getElementById('done');
+
+const timerEl = document.getElementById('timer');
+const pad = x => String(x).padStart(2, '0');
+function fmtTime(t) {
+  return pad(Math.floor(t / 3600)) + '.' + pad(Math.floor(t % 3600 / 60)) + '.' + pad(t % 60);
+}
+function show() {
+  countEl.textContent = pad(n);
+  doneEl.textContent = done;
+  timerEl.textContent = fmtTime(secs);
+}
+
+/* ---------- الألوان ---------- */
+const DEFAULT = { bg:'#ffffff', fg:'#000000', btn:'#FFA500', bar:'#000000' };
+function applyColors(c) {
+  root.setProperty('--bg', c.bg); root.setProperty('--fg', c.fg);
+  root.setProperty('--btn', c.btn); root.setProperty('--bar', c.bar);
+  const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = c.bg;
+}
+function randomColors() {
+  const h = Math.floor(Math.random() * 360);
+  const dark = Math.random() < 0.5;
+  return {
+    bg:  dark ? `hsl(${h} 30% 12%)` : `hsl(${h} 60% 94%)`,
+    fg:  dark ? '#ffffff' : '#000000',
+    btn: `hsl(${(h + 150) % 360} 85% 55%)`,
+    bar: `hsl(${(h + 210) % 360} 45% 20%)`
+  };
+}
+
+/* ---------- الصوت الخفيف عند 100 ---------- */
+let audioCtx;
+function chime() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = audioCtx.currentTime;
+    [659.25, 880].forEach((f, i) => {            // نغمتان هادئتان
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      const t = t0 + i * 0.18;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.12, t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(t); o.stop(t + 1);
+    });
+  } catch (e) {}
+}
+
+/* ---------- الأحداث ---------- */
+document.getElementById('btn').addEventListener('click', () => {
+  if (!started) { started = true; lastTick = Date.now(); store.set('started', true); }
+  if (n >= 100) n = 0;
+  n++;
+  if (n === 100) {
+    done++; store.set('done', done);
+    colors = randomColors(); applyColors(colors); store.set('colors', colors);
+    chime();
+    if (navigator.vibrate) navigator.vibrate(60);
+    countEl.classList.remove('pulse'); void countEl.offsetWidth; countEl.classList.add('pulse');
+  }
+  store.set('count', n);
+  show();
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  n = 0; colors = null; secs = 0; acc = 0; started = false;
+  store.set('count', 0); store.set('colors', null); store.set('secs', 0); store.set('started', false);
+  applyColors(DEFAULT); show();
+});
+
+/* ضغط مطول على "مرات بلوغ 100" لتصفيرها */
+(function () {
+  let timer;
+  const el = document.getElementById('stat');
+  const start = () => { timer = setTimeout(() => {
+      if (confirm('تصفير عدد مرات بلوغ 100؟')) { done = 0; store.set('done', 0); show(); }
+    }, 900); };
+  const stop = () => clearTimeout(timer);
+  el.addEventListener('touchstart', start, { passive:true });
+  el.addEventListener('touchend', stop); el.addEventListener('touchmove', stop);
+  el.addEventListener('mousedown', start); el.addEventListener('mouseup', stop); el.addEventListener('mouseleave', stop);
+})();
+
+/* ---------- الساعة والتاريخ ---------- */
+const clockEl = document.getElementById('clock');
+const dateEl = document.getElementById('date');
+let lastDay = '';
+function updateClock() {
+  const d = new Date();
+  clockEl.textContent = [d.getHours(), d.getMinutes(), d.getSeconds()].map(pad).join(':');
+  const key = d.toDateString();
+  if (key !== lastDay) {
+    lastDay = key;
+    try {
+      dateEl.textContent = d.toLocaleDateString('ar-MA-u-nu-latn',
+        { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+    } catch (e) {
+      dateEl.textContent = d.toLocaleDateString();
+    }
+  }
+}
+updateClock();
+
+/* ---------- مؤقت وقت التسبيح ---------- */
+setInterval(() => {
+  updateClock();
+  const now = Date.now();
+  const dt = now - lastTick;
+  lastTick = now;
+  const running = started;
+  if (running) {
+    acc += dt;
+    if (acc >= 1000) {
+      secs += Math.floor(acc / 1000); acc %= 1000;
+      timerEl.textContent = fmtTime(secs);
+      if (secs % 5 === 0) store.set('secs', secs);
+    }
+  }
+  timerEl.classList.toggle('paused', !running);
+}, 250);
+document.addEventListener('visibilitychange', () => store.set('secs', secs));
+window.addEventListener('pagehide', () => store.set('secs', secs));
+
+/* ---------- شاشة الإقلاع ---------- */
+const splash = document.getElementById('splash');
+const hideSplash = () => splash.classList.add('hide');
+splash.addEventListener('click', hideSplash);
+setTimeout(hideSplash, 2800);
+
+/* ---------- البداية ---------- */
+applyColors(colors || DEFAULT);
+show();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>
